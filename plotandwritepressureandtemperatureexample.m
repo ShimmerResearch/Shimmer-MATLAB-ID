@@ -150,7 +150,11 @@ deviceHandler.bluetoothManager.getShimmerDeviceBtConnected(comPort).disconnect()
         sensorIds(1) = java.lang.Integer(deviceHandler.sensorClass.SHIMMER_BMPX80_PRESSURE);
         hwid = shimmerClone.getHardwareVersionParsed();
         if hwid.equals('Shimmer3R')
-            sensorIds(1) = java.lang.Integer(deviceHandler.sensorClass.SHIMMER_BMP390_PRESSURE);
+            if shimmerClone.isSupportedBmp581()                    % newer Shimmer3R boards carry a BMP581, older ones a BMP390
+                sensorIds(1) = java.lang.Integer(deviceHandler.sensorClass.SHIMMER_BMP581_PRESSURE);
+            else
+                sensorIds(1) = java.lang.Integer(deviceHandler.sensorClass.SHIMMER_BMP390_PRESSURE);
+            end
         end
         shimmerClone.setSensorIdsEnabled(sensorIds);
 
