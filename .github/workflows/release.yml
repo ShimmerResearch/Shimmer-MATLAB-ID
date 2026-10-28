@@ -1,0 +1,75 @@
+# Publishes a release of the MATLAB API each time libs/ShimmerJavaClass.jar changes on master, which
+# is what merging an "Update ShimmerJavaClass.jar" pull request does (DEV-1358). Those pull requests
+# are opened by the Release Java API workflow in Shimmer-Java-Android-API. Run it by hand
+# (Actions > Release > Run workflow) to release what is on master now, if it has no release yet.
+#
+# The tag is the next patch after the latest vX.Y.Z tag (v3.0.1 -> v3.0.2): the MATLAB API keeps its
+# own version, and the title names the Java API version in the jar, taken from the message of the
+# commit that last changed it. A commit that already has a vX.Y.Z tag is not released again. The
+# notes list the pull requests merged since the previous tag. Nothing is attached: GitHub adds the
+# source archive, which is the MATLAB API.
+
+name: Release
+
+on:
+  push:
+    branches: [ master ]
+    paths: [ 'libs/ShimmerJavaClass.jar' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # the tags, and the commit that last changed the jar
+          persist-credentials: false # gh uses GH_TOKEN; nothing is pushed with git
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          released=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+          if [ -n "$released" ]; then
+            echo "::notice::$GITHUB_SHA is already released as $released"
+            exit 0
+          fi
+          previous=$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+          if [ -z "$previous" ]; then
+            echo "::error::No vX.Y.Z tag to take the next version from"
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<< "${previous#v}"
+          tag="v$major.$minor.$((patch + 1))"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "::notice::$tag is already released"
+            exit 0
+          fi
+
+          # The Release Java API workflow commits the jar as "Update ShimmerJavaClass.jar to Shimmer
+          # Java API <version>"; a squash merge adds " (#<pr>)".
+          subject=$(git log -1 --format=%s -- libs/ShimmerJavaClass.jar)
+          java=$(sed -n 's/^Update ShimmerJavaClass\.jar to Shimmer Java API \([^ ]*\).*/\1/p' <<< "$subject")
+          if [ -n "$java" ]; then
+            title="Shimmer MATLAB API $tag (Java API $java)"
+          else
+            echo "::warning::Cannot tell the Java API version from the commit that last changed the jar: $subject"
+            title="Shimmer MATLAB API $tag"
+          fi
+
+          {
+            if [ -n "$java" ]; then
+              echo "libs/ShimmerJavaClass.jar is Shimmer Java API $java: https://github.com/ShimmerResearch/Shimmer-Java-Android-API/releases/tag/API_v$java"
+              echo
+            fi
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" -f previous_tag_name="$previous" --jq .body
+          } > notes.md
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$title" --notes-file notes.md
